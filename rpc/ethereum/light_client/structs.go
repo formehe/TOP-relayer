@@ -1,10 +1,10 @@
 package light_client
 
 import (
+	fieldparams "github.com/OffchainLabs/prysm/v6/config/fieldparams"
+	"github.com/OffchainLabs/prysm/v6/consensus-types/primitives"
+	eth "github.com/OffchainLabs/prysm/v6/proto/prysm/v1alpha1"
 	"github.com/ethereum/go-ethereum/rlp"
-	fieldparams "github.com/prysmaticlabs/prysm/v4/config/fieldparams"
-	"github.com/prysmaticlabs/prysm/v4/consensus-types/primitives"
-	eth "github.com/prysmaticlabs/prysm/v4/proto/prysm/v1alpha1"
 )
 
 type BeaconBlockHeader struct {

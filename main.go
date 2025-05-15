@@ -11,6 +11,9 @@ import (
 	"toprelayer/relayer"
 	"toprelayer/util"
 
+	"net/http"
+	_ "net/http/pprof"
+
 	"github.com/urfave/cli/v2"
 )
 
@@ -33,6 +36,10 @@ func init() {
 		util.VersionCommand,
 		util.GetInitDataCommand,
 	}
+
+	go func() {
+		http.ListenAndServe("localhost:6060", nil)
+	}()
 }
 
 func main() {
