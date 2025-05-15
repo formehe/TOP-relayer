@@ -3,20 +3,21 @@ package util
 import (
 	"context"
 	"fmt"
-	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/ethclient"
-	"github.com/ethereum/go-ethereum/rlp"
-	"github.com/prysmaticlabs/prysm/v4/api/client/beacon"
-	"github.com/prysmaticlabs/prysm/v4/consensus-types/primitives"
-	eth "github.com/prysmaticlabs/prysm/v4/proto/prysm/v1alpha1"
-	"github.com/wonderivan/logger"
 	"math/big"
 	"strconv"
 	"toprelayer/relayer/toprelayer/ethtypes"
 	"toprelayer/rpc/ethereum"
 	beaconrpc "toprelayer/rpc/ethereum"
 	lightclient "toprelayer/rpc/ethereum/light_client"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/prysmaticlabs/prysm/v5/api/client/beacon"
+	"github.com/prysmaticlabs/prysm/v5/consensus-types/primitives"
+	eth "github.com/prysmaticlabs/prysm/v5/proto/prysm/v1alpha1"
+	"github.com/wonderivan/logger"
 )
 
 type ExtendedBeaconBlockHeader struct {

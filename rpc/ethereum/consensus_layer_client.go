@@ -7,17 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/ethereum/go-ethereum/common"
-	"github.com/prysmaticlabs/prysm/v4/api/client/beacon"
-	state_native "github.com/prysmaticlabs/prysm/v4/beacon-chain/state/state-native"
-	fieldparams "github.com/prysmaticlabs/prysm/v4/config/fieldparams"
-	"github.com/prysmaticlabs/prysm/v4/consensus-types/blocks"
-	"github.com/prysmaticlabs/prysm/v4/consensus-types/interfaces"
-	"github.com/prysmaticlabs/prysm/v4/consensus-types/primitives"
-	eth "github.com/prysmaticlabs/prysm/v4/proto/prysm/v1alpha1"
-	"github.com/prysmaticlabs/prysm/v4/runtime/version"
-	"github.com/wonderivan/logger"
-	"google.golang.org/protobuf/proto"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -26,6 +15,18 @@ import (
 	"time"
 	"toprelayer/relayer/toprelayer/ethtypes"
 	"toprelayer/rpc/ethereum/light_client"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/prysmaticlabs/prysm/v5/api/client/beacon"
+	state_native "github.com/prysmaticlabs/prysm/v5/beacon-chain/state/state-native"
+	fieldparams "github.com/prysmaticlabs/prysm/v5/config/fieldparams"
+	"github.com/prysmaticlabs/prysm/v5/consensus-types/blocks"
+	"github.com/prysmaticlabs/prysm/v5/consensus-types/interfaces"
+	"github.com/prysmaticlabs/prysm/v5/consensus-types/primitives"
+	eth "github.com/prysmaticlabs/prysm/v5/proto/prysm/v1alpha1"
+	"github.com/prysmaticlabs/prysm/v5/runtime/version"
+	"github.com/wonderivan/logger"
+	"google.golang.org/protobuf/proto"
 )
 
 type BeaconClient struct {
@@ -47,10 +48,16 @@ func NewBeaconClient(httpUrl string) (*BeaconClient, error) {
 }
 
 func unmarshalSignedBlock(signedBeaconBlockSsz []byte) (interface{}, error) {
-	var signedBeaconBlock eth.SignedBeaconBlockDeneb
-	err := signedBeaconBlock.UnmarshalSSZ(signedBeaconBlockSsz)
+	var signedBeaconBlockElectra eth.SignedBeaconBlockElectra
+	err := signedBeaconBlockElectra.UnmarshalSSZ(signedBeaconBlockSsz)
 	if err == nil {
-		return &signedBeaconBlock, nil
+		return &signedBeaconBlockElectra, nil
+	}
+
+	var signedBeaconBlockDeneb eth.SignedBeaconBlockDeneb
+	err = signedBeaconBlockDeneb.UnmarshalSSZ(signedBeaconBlockSsz)
+	if err == nil {
+		return &signedBeaconBlockDeneb, nil
 	}
 
 	var signedBeaconBlockCapella eth.SignedBeaconBlockCapella
@@ -58,6 +65,7 @@ func unmarshalSignedBlock(signedBeaconBlockSsz []byte) (interface{}, error) {
 	if err == nil {
 		return &signedBeaconBlockCapella, nil
 	}
+
 	return nil, err
 }
 
@@ -169,6 +177,30 @@ func (c *BeaconClient) GetBlockNumberForSlot(slot primitives.Slot) (uint64, erro
 		return 0, err
 	}
 	return executionPayload.BlockNumber(), nil
+}
+
+func (c *BeaconClient) getBeaconStateElectra(id primitives.Slot) (*eth.BeaconStateElectra, error) {
+	start := time.Now()
+	defer func() {
+		logger.Info("Slot:%s,getBeaconStateElectra time:%v", id, time.Since(start))
+	}()
+
+	writer := httptest.NewRecorder()
+	writer.Body = &bytes.Buffer{}
+
+	sszBeaconState, err := c.GetState(context.Background(), beacon.StateOrBlockId(strconv.FormatUint(uint64(id), 10)))
+	if err != nil {
+		logger.Error("GetState error:", err)
+		return nil, err
+	}
+
+	var state eth.BeaconStateElectra
+	if err = state.UnmarshalSSZ(sszBeaconState); err != nil {
+		logger.Error("UnmarshalSSZ error:", err)
+		return nil, err
+	}
+
+	return &state, nil
 }
 
 func (c *BeaconClient) getBeaconStateDeneb(id primitives.Slot) (*eth.BeaconStateDeneb, error) {
@@ -631,7 +663,16 @@ func (c *BeaconClient) constructFromBeaconBlockBody(beaconBlockBody interfaces.R
 	copy(finalizedBlockBodyHash[:], blockHash[:])
 
 	var beaconBlockMerkleTree, executionPayloadMerkleTree MerkleTreeNode
-	if beaconBlockBody.Version() >= version.Deneb {
+	if beaconBlockBody.Version() >= version.Electra {
+		if beaconBlockMerkleTree, err = BeaconBlockBodyMerkleTreeElectra(beaconBlockBody); err != nil {
+			logger.Error("BeaconClient BeaconBlockBodyMerkleTreeElectra error: ", err)
+			return nil, err
+		}
+		if executionPayloadMerkleTree, err = ExecutionPayloadMerkleTreeCancun(executionPayload); err != nil {
+			logger.Error("BeaconClient ExecutionPayloadMerkleTreeNew error: ", err)
+			return nil, err
+		}
+	} else if beaconBlockBody.Version() >= version.Deneb {
 		if beaconBlockMerkleTree, err = BeaconBlockBodyMerkleTreeDeneb(beaconBlockBody); err != nil {
 			logger.Error("BeaconClient BeaconBlockBodyMerkleTreeDeneb error: ", err)
 			return nil, err
@@ -657,6 +698,41 @@ func (c *BeaconClient) constructFromBeaconBlockBody(beaconBlockBody interfaces.R
 		BlockHash: finalizedBlockBodyHash,
 		Proof:     ethtypes.ConvertSliceBytes2Hash(blockProof),
 	}, nil
+}
+
+func (c *BeaconClient) getNextSyncCommitteeElectra(beaconState *eth.BeaconStateElectra) (*ethtypes.SyncCommitteeUpdate, error) {
+	beaconStateElectra := proto.Clone(beaconState).(*eth.BeaconStateElectra)
+
+	if beaconStateElectra == nil {
+		return nil, nil
+	}
+
+	if beaconStateElectra.GetNextSyncCommittee() == nil {
+		logger.Error("BeaconChainClient NextSyncCommittee nil")
+		return nil, errors.New("NextSyncCommittee nil")
+	}
+	var state, err = state_native.InitializeFromProtoElectra(beaconStateElectra)
+	if err != nil {
+		logger.Error("BeaconChainClient InitializeFromProtoElectra error:", err)
+		return nil, err
+	}
+	nextSyncCommitteeProofData, err := state.NextSyncCommitteeProof(context.Background())
+	if err != nil {
+		logger.Error("BeaconChainClient NextSyncCommitteeProof error:", err)
+		return nil, err
+	}
+
+	nextSyncCommitteeProof, err := ethtypes.ConvertSliceBytes2SliceBytes32(nextSyncCommitteeProofData)
+	if err != nil {
+		logger.Error("BeaconChainClient ConvertSliceBytes2SliceBytes32 error:", err)
+		return nil, err
+	}
+
+	update := &ethtypes.SyncCommitteeUpdate{
+		NextSyncCommittee:       beaconStateElectra.NextSyncCommittee,
+		NextSyncCommitteeBranch: nextSyncCommitteeProof,
+	}
+	return update, nil
 }
 
 func (c *BeaconClient) getNextSyncCommitteeDeneb(beaconState *eth.BeaconStateDeneb) (*ethtypes.SyncCommitteeUpdate, error) {
@@ -725,6 +801,83 @@ func (c *BeaconClient) getNextSyncCommitteeCapella(beaconState *eth.BeaconStateC
 	update := &ethtypes.SyncCommitteeUpdate{
 		NextSyncCommittee:       beaconStateCapella.NextSyncCommittee,
 		NextSyncCommitteeBranch: nextSyncCommitteeProof,
+	}
+	return update, nil
+}
+
+func (c *BeaconClient) getFinalityLightClientUpdateForStateElectra(attestedSlot, signatureSlot primitives.Slot, beaconState, finalityBeaconState *eth.BeaconStateElectra) (*ethtypes.LightClientUpdate, error) {
+	beaconBody, err := c.GetBeaconBlockBody(beacon.StateOrBlockId(strconv.FormatUint(uint64(signatureSlot), 10)))
+	if err != nil {
+		logger.Error("BeaconChainClient GetBeaconBlockBodyForBlockId error:", err)
+		return nil, err
+	}
+
+	syncAggregate, err := beaconBody.SyncAggregate()
+	if err != nil {
+		logger.Error("BeaconChainClient SyncAggregate error:", err)
+		return nil, err
+	}
+
+	attestedHeader, err := c.GetBeaconBlockHeader(beacon.StateOrBlockId(strconv.FormatUint(uint64(attestedSlot), 10)))
+	if err != nil {
+		logger.Error("BeaconChainClient GetBeaconBlockHeader error:", err)
+		return nil, err
+	}
+	finalityHash := beaconState.FinalizedCheckpoint.Root
+	signedBeaconBlock, err := c.GetSignedBeaconBlock(beacon.StateOrBlockId(finalityHash))
+	if err != nil {
+		logger.Error("BeaconChainClient GetSignedBeaconBlock error:", err)
+		return nil, err
+	}
+	finalityHeader, err := signedBeaconBlock.Header()
+	if err != nil {
+		logger.Error("BeaconChainClient GetBeaconBlockHeader error:", err)
+		return nil, err
+	}
+	finalizedBlockBody := signedBeaconBlock.Block().Body()
+	executionBlockProof, err := c.constructFromBeaconBlockBody(finalizedBlockBody)
+	if err != nil {
+		logger.Error("BeaconChainClient constructFromBeaconBlockBody hash error:", err)
+		return nil, err
+	}
+	state, err := state_native.InitializeFromProtoUnsafeElectra(proto.Clone(beaconState).(*eth.BeaconStateElectra))
+	if err != nil {
+		logger.Error("BeaconChainClient InitializeFromProtoUnsafeBellatrix error:", err)
+		return nil, err
+	}
+
+	update := &ethtypes.LightClientUpdate{
+		AttestedBeaconHeader: attestedHeader,
+		SyncAggregate: &eth.SyncAggregate{
+			SyncCommitteeBits:      syncAggregate.SyncCommitteeBits,
+			SyncCommitteeSignature: syncAggregate.SyncCommitteeSignature,
+		},
+		SignatureSlot: uint64(signatureSlot),
+	}
+	proofData, err := state.FinalizedRootProof(context.Background())
+	if err != nil {
+		logger.Error("BeaconChainClient FinalizedRootProof error:", err)
+		return nil, err
+	}
+	proof, err := ethtypes.ConvertSliceBytes2SliceBytes32(proofData)
+	if err != nil {
+		logger.Error("BeaconChainClient ConvertSliceBytes2SliceBytes32 error:", err)
+		return nil, err
+	}
+	update.FinalizedUpdate = &ethtypes.FinalizedHeaderUpdate{
+		HeaderUpdate: &ethtypes.HeaderUpdate{
+			BeaconHeader:        finalityHeader.GetHeader(),
+			ExecutionBlockHash:  executionBlockProof.BlockHash,
+			ExecutionHashBranch: executionBlockProof.Proof,
+		},
+		FinalityBranch: proof,
+	}
+	if finalityBeaconState != nil {
+		update.NextSyncCommitteeUpdate, err = c.getNextSyncCommitteeElectra(finalityBeaconState)
+		if err != nil {
+			logger.Error("BeaconChainClient getNextSyncCommittee error:", err)
+			return nil, err
+		}
 	}
 	return update, nil
 }
@@ -891,26 +1044,26 @@ func (c *BeaconClient) getFinalityLightClientUpdate(attestedSlot primitives.Slot
 	}
 	logger.Info("GetFinalityLightClientUpdate attestedSlot:%d, signatureSlot:%d", attestedSlot, signatureSlot)
 	{
-		beaconState, err := c.getBeaconStateDeneb(attestedSlot)
+		beaconState, err := c.getBeaconStateElectra(attestedSlot)
 		if err == nil {
-			var finalityBeaconState *eth.BeaconStateDeneb = nil
+			var finalityBeaconState *eth.BeaconStateElectra = nil
 			if useNextSyncCommittee == true {
 				finalityBeaconState = beaconState
 			}
-			return c.getFinalityLightClientUpdateForStateDeneb(attestedSlot, signatureSlot, beaconState, finalityBeaconState)
+			return c.getFinalityLightClientUpdateForStateElectra(attestedSlot, signatureSlot, beaconState, finalityBeaconState)
 		}
 	}
 
-	beaconState, err := c.getBeaconStateCapella(attestedSlot)
+	beaconState, err := c.getBeaconStateDeneb(attestedSlot)
 	if err != nil {
 		logger.Error("BeaconChainClient getBeaconState error:", err)
 		return nil, err
 	}
-	var finalityBeaconState *eth.BeaconStateCapella = nil
+	var finalityBeaconState *eth.BeaconStateDeneb = nil
 	if useNextSyncCommittee == true {
 		finalityBeaconState = beaconState
 	}
-	return c.getFinalityLightClientUpdateForStateCapella(attestedSlot, signatureSlot, beaconState, finalityBeaconState)
+	return c.getFinalityLightClientUpdateForStateDeneb(attestedSlot, signatureSlot, beaconState, finalityBeaconState)
 }
 
 func (c *BeaconClient) getLightClientUpdateByFinalizedSlot(finalizedSlot primitives.Slot, useNextSyncCommittee bool) (*light_client.LightClientUpdate, error) {
@@ -999,6 +1152,21 @@ func (c *BeaconClient) getNextSyncCommitteeUpdateByFinalized(finalizedSlot primi
 		return nil, err
 	}
 	logger.Info("GetNextSyncCommitteeUpdateV2 attestedSlot:%d, signatureSlot:%d", attestedSlot, signatureSlot)
+	{
+		beaconState, err := c.getBeaconStateElectra(primitives.Slot(attestedSlot))
+		if err == nil {
+			cu, err := c.getNextSyncCommitteeElectra(beaconState)
+			if err != nil {
+				logger.Error("Eth2TopRelayerV2 getNextSyncCommittee error:", err)
+				return nil, err
+			}
+			return &light_client.SyncCommitteeUpdate{
+				NextSyncCommittee:       cu.NextSyncCommittee,
+				NextSyncCommitteeBranch: cu.NextSyncCommitteeBranch,
+			}, nil
+		}
+	}
+
 	{
 		beaconState, err := c.getBeaconStateDeneb(primitives.Slot(attestedSlot))
 		if err == nil {

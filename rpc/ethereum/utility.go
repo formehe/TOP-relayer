@@ -2,15 +2,16 @@ package ethereum
 
 import (
 	"fmt"
-	ssz "github.com/prysmaticlabs/fastssz"
-	fieldparams "github.com/prysmaticlabs/prysm/v4/config/fieldparams"
-	"github.com/prysmaticlabs/prysm/v4/consensus-types/interfaces"
-	"github.com/prysmaticlabs/prysm/v4/consensus-types/primitives"
-	eth "github.com/prysmaticlabs/prysm/v4/proto/prysm/v1alpha1"
-	"github.com/wonderivan/logger"
 	"strings"
 	"toprelayer/relayer/toprelayer/ethtypes"
 	"toprelayer/rpc/ethereum/light_client"
+
+	ssz "github.com/prysmaticlabs/fastssz"
+	fieldparams "github.com/prysmaticlabs/prysm/v5/config/fieldparams"
+	"github.com/prysmaticlabs/prysm/v5/consensus-types/interfaces"
+	"github.com/prysmaticlabs/prysm/v5/consensus-types/primitives"
+	eth "github.com/prysmaticlabs/prysm/v5/proto/prysm/v1alpha1"
+	"github.com/wonderivan/logger"
 )
 
 const (
@@ -344,6 +345,134 @@ func BeaconBlockBodyMerkleTreeDeneb(b interfaces.ReadOnlyBeaconBlockBody) (Merkl
 	hashRoot, err := specialFieldBlobKzgCommitmentsHashTreeRoot(blobKzgCommitments)
 	if err == nil {
 		leaves[11] = hashRoot
+	}
+
+	return create(leaves, BeaconBlockBodyTreeDepth), nil
+}
+
+func BeaconBlockBodyMerkleTreeElectra(b interfaces.ReadOnlyBeaconBlockBody) (MerkleTreeNode, error) {
+	leaves := make([][32]byte, 12)
+
+	// Field (0) 'RandaoReveal'
+	randao := b.RandaoReveal()
+	if hashRoot, err := BytesHashTreeRoot(randao[:], 96, "RandaoReveal"); err != nil {
+		return nil, err
+	} else {
+		leaves[0] = hashRoot
+	}
+
+	// Field (1) 'Eth1Data'
+	if hashRoot, err := b.Eth1Data().HashTreeRoot(); err != nil {
+		return nil, err
+	} else {
+		leaves[1] = hashRoot
+	}
+
+	// Field (2) 'Graffiti'
+	graffiti := b.Graffiti()
+	if hashRoot, err := BytesHashTreeRoot(graffiti[:], len(graffiti), "Graffiti"); err != nil {
+		return nil, err
+	} else {
+		leaves[2] = hashRoot
+	}
+
+	// Field (3) 'ProposerSlashings'
+	hrs := make([]ssz.HashRoot, len(b.ProposerSlashings()))
+	for i, v := range b.ProposerSlashings() {
+		hrs[i] = v
+	}
+	if hashRoot, err := VecObjectHashTreeRoot(hrs, 16); err != nil {
+		return nil, err
+	} else {
+		leaves[3] = hashRoot
+	}
+
+	// Field (4) 'AttesterSlashings'
+	hrs = make([]ssz.HashRoot, len(b.AttesterSlashings()))
+	for i, v := range b.AttesterSlashings() {
+		hrs[i] = v
+	}
+	if hashRoot, err := VecObjectHashTreeRoot(hrs, 2); err != nil {
+		return nil, err
+	} else {
+		leaves[4] = hashRoot
+	}
+
+	// Field (5) 'Attestations'
+	hrs = make([]ssz.HashRoot, len(b.Attestations()))
+	for i, v := range b.Attestations() {
+		hrs[i] = v
+	}
+	if hashRoot, err := VecObjectHashTreeRoot(hrs, 128); err != nil {
+		return nil, err
+	} else {
+		leaves[5] = hashRoot
+	}
+
+	// Field (6) 'Deposits'
+	hrs = make([]ssz.HashRoot, len(b.Deposits()))
+	for i, v := range b.Deposits() {
+		hrs[i] = v
+	}
+	if hashRoot, err := VecObjectHashTreeRoot(hrs, 16); err != nil {
+		return nil, err
+	} else {
+		leaves[6] = hashRoot
+	}
+
+	// Field (7) 'VoluntaryExits'
+	hrs = make([]ssz.HashRoot, len(b.VoluntaryExits()))
+	for i, v := range b.VoluntaryExits() {
+		hrs[i] = v
+	}
+	if hashRoot, err := VecObjectHashTreeRoot(hrs, 16); err != nil {
+		return nil, err
+	} else {
+		leaves[7] = hashRoot
+	}
+
+	// Field (8) 'SyncAggregate'
+	leaves[8] = [32]byte{0}
+	if syncAggregate, err := b.SyncAggregate(); err == nil {
+		if hashRoot, err := syncAggregate.HashTreeRoot(); err == nil {
+			leaves[8] = hashRoot
+		}
+	}
+
+	// Field (9) 'ExecutionPayload'
+	leaves[9] = [32]byte{0}
+	if executionPayload, err := b.Execution(); err == nil {
+		if hashRoot, err := executionPayload.HashTreeRoot(); err == nil {
+			leaves[9] = hashRoot
+		}
+	}
+
+	// Field (10) 'BlsToExecutionChanges'
+	leaves[10] = [32]byte{0}
+	if blsToExecutionChanges, err := b.BLSToExecutionChanges(); err == nil {
+		hrs = make([]ssz.HashRoot, len(blsToExecutionChanges))
+		for i, v := range blsToExecutionChanges {
+			hrs[i] = v
+		}
+		if hashRoot, err := VecObjectHashTreeRoot(hrs, 16); err == nil {
+			leaves[10] = hashRoot
+		}
+	}
+
+	// Field (11) 'BlobKzgCommitments'
+	leaves[11] = [32]byte{0}
+	blobKzgCommitments, _ := b.BlobKzgCommitments()
+	hashRoot, err := specialFieldBlobKzgCommitmentsHashTreeRoot(blobKzgCommitments)
+	if err == nil {
+		leaves[11] = hashRoot
+	}
+
+	// Field (12) 'ExecutionRequests'
+	leaves[12] = [32]byte{0}
+	if executionRequests, err := b.ExecutionRequests(); err == nil {
+		if hashRoot, err := executionRequests.HashTreeRoot(); err == nil {
+			leaves[12] = hashRoot
+		}
 	}
 
 	return create(leaves, BeaconBlockBodyTreeDepth), nil
