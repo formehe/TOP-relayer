@@ -19,9 +19,12 @@ import (
 	"github.com/OffchainLabs/prysm/v6/api/client"
 	"github.com/OffchainLabs/prysm/v6/api/client/beacon"
 	"github.com/OffchainLabs/prysm/v6/beacon-chain/state"
+	"github.com/OffchainLabs/prysm/v6/beacon-chain/state/stateutil"
 	fieldparams "github.com/OffchainLabs/prysm/v6/config/fieldparams"
+	"github.com/OffchainLabs/prysm/v6/consensus-types/blocks"
 	"github.com/OffchainLabs/prysm/v6/consensus-types/interfaces"
 	"github.com/OffchainLabs/prysm/v6/consensus-types/primitives"
+	"github.com/OffchainLabs/prysm/v6/container/trie"
 	"github.com/OffchainLabs/prysm/v6/encoding/ssz/detect"
 	eth "github.com/OffchainLabs/prysm/v6/proto/prysm/v1alpha1"
 	"github.com/OffchainLabs/prysm/v6/runtime/version"
@@ -732,38 +735,34 @@ func (c *BeaconClient) constructFromBeaconBlockBody(beaconBlockBody interfaces.R
 	var finalizedBlockBodyHash common.Hash
 	copy(finalizedBlockBodyHash[:], blockHash[:])
 
-	var beaconBlockMerkleTree, executionPayloadMerkleTree MerkleTreeNode
-	if beaconBlockBody.Version() >= version.Electra {
-		if beaconBlockMerkleTree, err = BeaconBlockBodyMerkleTreeElectra(beaconBlockBody); err != nil {
-			logger.Error("BeaconClient BeaconBlockBodyMerkleTreeElectra error: ", err)
-			return nil, err
-		}
-		if executionPayloadMerkleTree, err = ExecutionPayloadMerkleTreeCancun(executionPayload); err != nil {
-			logger.Error("BeaconClient ExecutionPayloadMerkleTreeNew error: ", err)
-			return nil, err
-		}
-	} else if beaconBlockBody.Version() >= version.Deneb {
-		if beaconBlockMerkleTree, err = BeaconBlockBodyMerkleTreeDeneb(beaconBlockBody); err != nil {
-			logger.Error("BeaconClient BeaconBlockBodyMerkleTreeDeneb error: ", err)
-			return nil, err
-		}
+	var executionPayloadMerkleTree MerkleTreeNode
+	if beaconBlockBody.Version() >= version.Deneb {
 		if executionPayloadMerkleTree, err = ExecutionPayloadMerkleTreeCancun(executionPayload); err != nil {
 			logger.Error("BeaconClient ExecutionPayloadMerkleTreeNew error: ", err)
 			return nil, err
 		}
 	} else {
-		if beaconBlockMerkleTree, err = BeaconBlockBodyMerkleTreeCapella(beaconBlockBody); err != nil {
-			logger.Error("BeaconClient BeaconBlockBodyMerkleTree error: ", err)
-			return nil, err
-		}
 		if executionPayloadMerkleTree, err = ExecutionPayloadMerkleTreeShanghai(executionPayload); err != nil {
 			return nil, err
 		}
 	}
 
-	_, l1ExecutionPayloadProof := generateProof(beaconBlockMerkleTree, L1BeaconBlockBodyTreeExecutionPayloadIndex, L1BeaconBlockBodyProofSize)
+	//proof
+	fieldRoots, err := blocks.ComputeBlockBodyFieldRoots(context.Background(), beaconBlockBody.(*blocks.BeaconBlockBody))
+	if err != nil {
+		return nil, err
+	}
+
+	fieldRootsTrie := stateutil.Merkleize(fieldRoots)
+	l1ExecutionPayloadProof := trie.ProofFromMerkleLayers(fieldRootsTrie, int(L1BeaconBlockBodyTreeExecutionPayloadIndex))
+	l1ExecutionPayloadProofByte32, err := ethtypes.ConvertSliceBytes2SliceBytes32(l1ExecutionPayloadProof)
+	if err != nil {
+		return nil, err
+	}
+
 	_, blockProof := generateProof(executionPayloadMerkleTree, L2ExecutionPayloadTreeExecutionBlockIndex, l2ExecutionPayloadProofSize)
-	blockProof = append(blockProof, l1ExecutionPayloadProof...)
+
+	blockProof = append(blockProof, l1ExecutionPayloadProofByte32...)
 	return &ethtypes.ExecutionBlockProof{
 		BlockHash: finalizedBlockBodyHash,
 		Proof:     ethtypes.ConvertSliceBytes2Hash(blockProof),
