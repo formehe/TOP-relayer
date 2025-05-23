@@ -14,6 +14,7 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 
+	"github.com/OffchainLabs/prysm/v6/config/params"
 	"github.com/urfave/cli/v2"
 )
 
@@ -35,6 +36,17 @@ func init() {
 	app.Commands = []*cli.Command{
 		util.VersionCommand,
 		util.GetInitDataCommand,
+	}
+
+	//network
+	isTestNet := os.Getenv("ENABLE_TESTNET")
+
+	if isTestNet != "" {
+		netConfig, err := params.ByName(params.SepoliaName)
+		if err != nil {
+			panic(err)
+		}
+		params.SetActive(netConfig)
 	}
 
 	go func() {
